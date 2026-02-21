@@ -2,22 +2,19 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import re
-import io
 
 # Configuración de la página
-st.set_page_config(page_title="Dashboard Alzheimer & Aging", layout="wide")
+st.set_page_config(page_title="Alzheimer & Aging Stats", layout="wide")
 
-# --- FUNCIONES DE APOYO ---
+# --- FUNCIONES DE LIMPIEZA ---
 
 def extract_coords(point_str):
-    """Extrae latitud y longitud del formato 'POINT (longitud latitud)'"""
+    """Extrae lat/lon del formato 'POINT (lon lat)'"""
     try:
         if pd.isna(point_str) or str(point_str).strip() == "":
             return None, None
-        # Busca números decimales o enteros (incluyendo negativos)
         coords = re.findall(r"[-+]?\d*\.\d+|\d+", str(point_str))
         if len(coords) >= 2:
-            # En formato POINT de este dataset: [0] es Longitud, [1] es Latitud
             return float(coords[1]), float(coords[0]) 
     except:
         return None, None
@@ -25,135 +22,106 @@ def extract_coords(point_str):
 
 @st.cache_data
 def load_data():
-    # Nombre exacto de tu archivo (asegúrate que la extensión sea .csv)
+    """Carga y limpia el dataset automáticamente"""
     file_path = "Alzheimer's_Disease_and_Healthy_Aging_Data_20260221.csv"
-    
     try:
-        # Intentar detectar el separador automáticamente (coma, punto y coma, etc.)
-        # engine='python' es más flexible con errores de formato
+        # sep=None detecta automáticamente si es coma o punto y coma
         df = pd.read_csv(file_path, sep=None, engine='python', on_bad_lines='skip')
         
-        # Limpieza de Data_Value: Convertir "45,4" -> 45.4
-        if 'Data_Value' in df.columns:
-            if df['Data_Value'].dtype == 'object':
-                df['Data_Value'] = df['Data_Value'].astype(str).str.replace(',', '.')
-            df['Data_Value'] = pd.to_numeric(df['Data_Value'], errors='coerce')
-        
-        # Extraer Coordenadas
-        if 'Geolocation' in df.columns:
-            coords = df['Geolocation'].apply(extract_coords)
-            df[['lat', 'lon']] = pd.DataFrame(coords.tolist(), index=df.index)
-            
-        # Limpiar límites de confianza numéricos
-        for col in ['Low_Confidence_Limit', 'High_Confidence_Limit']:
+        # Limpieza de valores numéricos (manejo de comas decimales)
+        for col in ['Data_Value', 'Low_Confidence_Limit', 'High_Confidence_Limit']:
             if col in df.columns:
                 if df[col].dtype == 'object':
                     df[col] = df[col].astype(str).str.replace(',', '.')
                 df[col] = pd.to_numeric(df[col], errors='coerce')
-                
+        
+        # Procesar geolocalización para mapas
+        if 'Geolocation' in df.columns:
+            coords = df['Geolocation'].apply(extract_coords)
+            df[['lat', 'lon']] = pd.DataFrame(coords.tolist(), index=df.index)
+            
         return df
     except Exception as e:
-        st.error(f"Error crítico al leer el archivo: {e}")
+        st.error(f"Error al cargar el archivo: {e}")
         return None
 
-# --- LÓGICA DE LA APP ---
+# --- EJECUCIÓN DEL DASHBOARD ---
 
 df = load_data()
 
 if df is not None:
-    # --- TÍTULO ---
-    st.title("🧠 Dashboard de Salud Cognitiva y Envejecimiento")
-    st.info("Datos analizados del BRFSS sobre Alzheimer y deterioro cognitivo.")
+    st.title("🧠 Dashboard: Salud Cognitiva y Envejecimiento")
+    st.markdown("Análisis nacional basado en el dataset de Alzheimer y Aging.")
 
-    # --- BARRA LATERAL (Filtros Globales) ---
-    st.sidebar.header("🔍 Filtros de Visualización")
+    # --- BARRA LATERAL (FILTROS) ---
+    st.sidebar.header("⚙️ Configuración Global")
     
-    # Filtro de Tema
-    temas_disponibles = sorted(df['Topic'].dropna().unique())
-    tema_sel = st.sidebar.selectbox("Selecciona un Tema:", temas_disponibles)
+    # El Tema y la Edad definen el color del mapa
+    temas = sorted(df['Topic'].dropna().unique())
+    tema_sel = st.sidebar.selectbox("1. Selecciona el Tema:", temas)
 
-    # Filtro de Estado
-    estados_disponibles = sorted(df['LocationDesc'].dropna().unique())
-    estados_sel = st.sidebar.multiselect(
-        "Selecciona Estados:", 
-        options=estados_disponibles,
-        default=estados_disponibles[:3] # Selecciona los 3 primeros por defecto
-    )
+    edades = sorted(df['Age Group'].dropna().unique())
+    edad_sel = st.sidebar.selectbox("2. Grupo de Edad:", edades)
 
-    # Filtrar el DataFrame
-    mask = (df['Topic'] == tema_sel) & (df['LocationDesc'].isin(estados_sel))
-    df_filtered = df[mask]
+    # Filtrado base para el mapa nacional
+    df_mapa = df[(df['Topic'] == tema_sel) & (df['Age Group'] == edad_sel)]
 
-    # --- MÉTRICAS ---
-    m1, m2, m3 = st.columns(3)
-    with m1:
-        avg_val = df_filtered['Data_Value'].mean()
-        st.metric("Prevalencia Media", f"{avg_val:.2f}%" if not pd.isna(avg_val) else "N/A")
-    with m2:
-        st.metric("Total Registros", len(df_filtered))
-    with m3:
-        st.metric("Estados Filtrados", len(estados_sel))
+    # --- DISEÑO POR PESTAÑAS ---
+    tab1, tab2, tab3 = st.tabs(["🌍 Mapa Nacional", "📊 Comparativa de Estados", "📄 Datos Detallados"])
 
-    st.divider()
+    with tab1:
+        st.subheader(f"Intensidad de {tema_sel}")
+        st.write(f"Mapa interactivo: El color oscuro indica mayor porcentaje de impacto.")
 
-    # --- MAPA DE CALOR ---
-    st.subheader("📍 Mapa de Calor: Distribución Geográfica")
-    # Solo filas con coordenadas y valor
-    df_map = df_filtered.dropna(subset=['lat', 'lon', 'Data_Value'])
-    
-    if not df_map.empty:
-        fig_map = px.density_mapbox(
-            df_map, 
-            lat='lat', lon='lon', z='Data_Value', 
-            radius=25,
-            center=dict(lat=37.09, lon=-95.71), # Centro de USA
-            zoom=3,
-            mapbox_style="carto-positron",
-            color_continuous_scale="Reds",
-            labels={'Data_Value': 'Valor %'}
+        # Agrupamos por estado para el mapa de coropletas
+        df_geo = df_mapa.groupby(['LocationAbbr', 'LocationDesc'])['Data_Value'].mean().reset_index()
+
+        fig_choropleth = px.choropleth(
+            df_geo,
+            locations='LocationAbbr',
+            locationmode="USA-states",
+            color='Data_Value',
+            scope="usa",
+            color_continuous_scale="Reds", # Escala de color claro a oscuro
+            labels={'Data_Value': '% Prevalencia'},
+            hover_name='LocationDesc'
         )
-        fig_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=450)
-        st.plotly_chart(fig_map, use_container_width=True)
-    else:
-        st.warning("No hay datos geográficos para mostrar en el mapa con los filtros actuales.")
+        fig_choropleth.update_layout(geo_scope='usa', margin={"r":0,"t":0,"l":0,"b":0}, height=550)
+        st.plotly_chart(fig_choropleth, use_container_width=True)
 
-    # --- GRÁFICOS ---
-    st.divider()
-    c1, c2 = st.columns(2)
+    with tab2:
+        st.subheader("Filtro por Estados Específicos")
+        # Filtro multiselect solo para las gráficas de comparación
+        estados_sel = st.multiselect(
+            "Selecciona estados para analizar en detalle:", 
+            options=sorted(df_mapa['LocationDesc'].unique()),
+            default=sorted(df_mapa['LocationDesc'].unique())[:5]
+        )
+        
+        df_filtered = df_mapa[df_mapa['LocationDesc'].isin(estados_sel)]
 
-    with c1:
-        st.subheader("📊 Comparativa por Estratificación")
         if not df_filtered.empty:
-            # Agrupamos por estratificación para un gráfico más limpio
-            fig_bar = px.bar(
-                df_filtered, 
-                x='Stratification1', 
-                y='Data_Value', 
-                color='LocationDesc',
-                barmode='group',
-                labels={'Data_Value': '% de Prevalencia', 'Stratification1': 'Categoría'},
-                template="plotly_white"
-            )
-            st.plotly_chart(fig_bar, use_container_width=True)
+            c1, c2 = st.columns(2)
+            with c1:
+                st.write("**Desglose por Estratificación**")
+                fig_bar = px.bar(df_filtered, x='Stratification1', y='Data_Value', color='LocationDesc',
+                                 barmode='group', template="plotly_white")
+                st.plotly_chart(fig_bar, use_container_width=True)
+            with c2:
+                st.write("**Dispersión de Valores**")
+                fig_scatter = px.scatter(df_filtered, x='Low_Confidence_Limit', y='High_Confidence_Limit', 
+                                         color='LocationDesc', hover_data=['Stratification1'])
+                st.plotly_chart(fig_scatter, use_container_width=True)
+        else:
+            st.warning("Selecciona al menos un estado para ver las gráficas comparativas.")
 
-    with c2:
-        st.subheader("📈 Rango de Confianza (Bajo vs Alto)")
-        if not df_filtered.empty:
-            fig_scatter = px.scatter(
-                df_filtered,
-                x='Low_Confidence_Limit',
-                y='High_Confidence_Limit',
-                color='LocationDesc',
-                hover_data=['Stratification1'],
-                labels={'Low_Confidence_Limit': 'Límite Inferior', 'High_Confidence_Limit': 'Límite Superior'}
-            )
-            # Línea de referencia y = x
-            fig_scatter.add_shape(type="line", x0=0, y0=0, x1=100, y1=100, line=dict(color="gray", dash="dash"))
-            st.plotly_chart(fig_scatter, use_container_width=True)
-
-    # --- TABLA DE DATOS ---
-    with st.expander("📄 Ver Datos Detallados"):
-        st.dataframe(df_filtered.drop(columns=['lat', 'lon'], errors='ignore'), use_container_width=True)
+    with tab3:
+        st.subheader("Explorador de Datos Crudos")
+        st.dataframe(df_filtered if not df_filtered.empty else df_mapa, use_container_width=True)
 
 else:
-    st.warning("No se pudo cargar el dataset. Revisa el nombre del archivo y su ubicación.")
+    st.error("No se pudo inicializar el dashboard. Verifica que el archivo CSV esté en la raíz del proyecto.")
+
+# Pie de página informativo
+st.sidebar.divider()
+st.sidebar.caption("Dashboard actualizado - Feb 2026")
