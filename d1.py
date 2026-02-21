@@ -13,7 +13,7 @@ en los estados de EE.UU., utilizando datos públicos del CDC.
 
 @st.cache_data
 def load_data():
-    df = pd.read_csv("Alzheimer_Data.csv")
+    df = pd.read_csv("Alzheimer's_Disease_and_Healthy_Aging_Data_20260221.csv")
     return df
 
 df = load_data()
