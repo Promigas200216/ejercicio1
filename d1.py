@@ -79,9 +79,10 @@ if df is not None:
     # Barra lateral - Información de Autoría y Filtros
     st.sidebar.markdown("### Autoras")
     st.sidebar.markdown("""
-    * Valentina Torres Lugo
-    * Melanie Paola Perez Sujano
-    * Natalia Sojo Jemeniz
+    * Valentina Torres
+    * Melanie Paola Perez 
+    * Natalia Sojo 
+    * Dana Valentina Ramirez
     """)
     st.sidebar.divider()
 
